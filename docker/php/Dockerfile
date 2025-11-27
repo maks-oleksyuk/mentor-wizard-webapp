@@ -1,7 +1,7 @@
-FROM dunglas/frankenphp:1.9.1-php8.4-alpine
+FROM dunglas/frankenphp:1.10.1-php8.5-alpine
 
 # Copy composer from official image
-COPY --from=composer:2.8.5 /usr/bin/composer /usr/bin/
+COPY --from=composer:2.9.2 /usr/bin/composer /usr/bin/
 
 # Install system dependencies
 RUN \
