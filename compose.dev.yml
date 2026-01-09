@@ -6,10 +6,13 @@ services:
       POSTGRES_DB: ${DB_DATABASE}
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - 5432
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
       - mw-db-network
+      - dokploy-network
     healthcheck:
       test: pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}
       interval: 5s
@@ -26,36 +29,42 @@ services:
       - redis_data:/data
     networks:
       - mw-redis-network
+      - dokploy-network
     healthcheck:
-      test: redis-cli -a ${REDIS_PASSWORD} ping
+      test: redis-cli ping
       interval: 5s
       timeout: 10s
       retries: 20
 
-  app-base: &app-base
+  app: &app
     build:
-      context: .
+      context: ./
       dockerfile: docker/php/Dockerfile-dev
     restart: unless-stopped
-    volumes:
-      - ./:/var/www
-      - mw_app_composer_data:/.composer
-      - mw_app_npm_data:/.npm
-    networks:
-      - mw-db-network
-      - mw-redis-network
+    environment:
+      COMMAND: php artisan octane:frankenphp --host=0.0.0.0 --port=80 --watch
+      PROCESS: app
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-  app:
-    <<: *app-base
-    environment:
-      COMMAND: php artisan octane:frankenphp --host=0.0.0.0 --port=80 --watch
-      PROCESS: app
-      XDEBUG_MODE: debug,coverage
+    volumes:
+      - ./:/var/www
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+      - mw_app_composer_data:/.composer
+      - mw_app_npm_data:/.npm
+    ports:
+      - '80'
+      - '443'
+      - '5173'
+      - '9003'
+    networks:
+      - mw-db-network
+      - mw-redis-network
+      - dokploy-network
     healthcheck:
       test: curl -s http://localhost/up >/dev/null || exit 1
       interval: 5s
@@ -63,13 +72,13 @@ services:
       retries: 20
 
   workers:
-    <<: *app-base
+    <<: *app
     environment:
       COMMAND: php artisan queue:work --sleep=1 --tries=3
       PROCESS: worker
 
   schedule:
-    <<: *app-base
+    <<: *app
     environment:
       COMMAND: supercronic -quiet /var/www/docker/php/schedule/schedule
       PROCESS: schedule
@@ -80,25 +89,43 @@ services:
       retries: 2
 
   websockets:
-    <<: *app-base
+    <<: *app
     environment:
-      COMMAND: php artisan reverb:start --host=0.0.0.0 --port=8080 --debug
+      COMMAND:
+        php artisan reverb:start --host="0.0.0.0" --port=8080
+        --hostname="localhost" --debug
       PROCESS: reverb
+    ports:
+      - '8080:8080'
 
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
+    ports:
+      - '${FORWARD_MAILPIT_PORT:-1025}:1025'
+      - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
     networks:
       - mw-db-network
+      - dokploy-network
 
 volumes:
   db_data:
+    driver: local
     name: mw_db_data
   redis_data:
+    driver: local
     name: mw_redis_data
+  caddy_data:
+    driver: local
+    name: mw_caddy_data
+  caddy_config:
+    driver: local
+    name: mw_caddy_config
   mw_app_composer_data:
+    driver: local
     name: mw_app_composer_data
   mw_app_npm_data:
+    driver: local
     name: mw_app_npm_data
 
 networks:
@@ -106,3 +133,6 @@ networks:
     driver: bridge
   mw-redis-network:
     driver: bridge
+    name: mw-redis-network
+  dokploy-network:
+    external: true
