@@ -3,12 +3,20 @@ FROM dunglas/frankenphp:1.9.1-php8.4-alpine
 # Copy composer from official image
 COPY --from=composer:2.8.5 /usr/bin/composer /usr/bin/
 
+# Install supercronic (cron for containers)
+ARG SUPERCRONIC_VERSION=v0.2.33
+ARG SUPERCRONIC_ARCH=linux-amd64
+RUN wget -q "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-${SUPERCRONIC_ARCH}" \
+    -O /usr/local/bin/supercronic \
+    && chmod +x /usr/local/bin/supercronic
+
 # Install system dependencies
 RUN \
     set -ex && \
     apk update && \
     apk add --no-cache \
         git \
+        curl \
         nodejs \
         npm \
         postgresql-dev \
@@ -63,15 +71,34 @@ RUN echo "xdebug.mode=debug,coverage" >> /usr/local/etc/php/conf.d/docker-php-ex
 RUN echo "pcov.enabled=1" >> /usr/local/etc/php/conf.d/docker-php-ext-pcov.ini && \
     echo "pcov.directory=/var/www" >> /usr/local/etc/php/conf.d/docker-php-ext-pcov.ini
 
-# Install Node.js tools
+# Install Node.js tools with memory limit
+ENV NODE_OPTIONS="--max-old-space-size=384"
 RUN npm install -g corepack
 RUN corepack enable && corepack prepare yarn@4.10.3 --activate
 
-# Copy supervisor configuration
-COPY docker/php/supervisord/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
 # Set working directory
 WORKDIR /var/www
+
+# Копіюємо весь код проекту в образ
+COPY . .
+
+# Copy supervisor configuration (після COPY . . щоб перезаписати якщо треба)
+COPY docker/php/supervisord/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Створюємо необхідні директорії для storage
+RUN mkdir -p \
+    storage/app/public \
+    storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/logs \
+    bootstrap/cache \
+    public/build \
+    public/storage
+
+# Права доступу
+RUN chown -R www-data:www-data storage bootstrap/cache public/build public/storage
+RUN chmod -R 775 storage bootstrap/cache
 
 # Expose ports for HTTP, HTTPS, HTTP/3, and Vite dev server
 EXPOSE 80 443 443/udp 5173

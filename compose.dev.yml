@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:17-alpine3.20
     restart: unless-stopped
+    oom_score_adj: -500
     environment:
       POSTGRES_DB: ${DB_DATABASE}
       POSTGRES_USER: ${DB_USERNAME}
@@ -22,6 +23,7 @@ services:
   redis:
     image: redis:7.2.4-alpine
     restart: unless-stopped
+    oom_score_adj: -500
     command:
       - 'redis-server'
       - '--requirepass ${REDIS_PASSWORD}'
@@ -41,6 +43,8 @@ services:
       context: ./
       dockerfile: docker/php/Dockerfile-dev
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       COMMAND: php artisan octane:frankenphp --host=0.0.0.0 --port=80 --watch
       PROCESS: app
@@ -50,10 +54,27 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./:/var/www
+      # Персистентні залежності - зберігаються між деплоями
+      - ../files/vendor:/var/www/vendor
+      - ../files/node_modules:/var/www/node_modules
+
+      # Персистентне сховище Laravel
+      - ../files/storage/app:/var/www/storage/app
+      - ../files/storage/logs:/var/www/storage/logs
+      - ../files/storage/framework/cache/data:/var/www/storage/framework/cache/data
+      - ../files/storage/framework/sessions:/var/www/storage/framework/sessions
+      - ../files/storage/framework/views:/var/www/storage/framework/views
+
+      # Публічні файли (uploads)
+      - ../files/public/storage:/var/www/public/storage
+      - ../files/public:/var/www/public
+
+      # Caddy
       - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+
+      # Кеші composer/npm
       - mw_app_composer_data:/.composer
       - mw_app_npm_data:/.npm
     ports:
@@ -76,12 +97,22 @@ services:
     environment:
       COMMAND: php artisan queue:work --sleep=1 --tries=3
       PROCESS: worker
+      XDEBUG_MODE: 'off'
+    networks:
+      - mw-db-network
+      - mw-redis-network
+      - dokploy-network
 
   schedule:
     <<: *app
     environment:
       COMMAND: supercronic -quiet /var/www/docker/php/schedule/schedule
       PROCESS: schedule
+      XDEBUG_MODE: 'off'
+    networks:
+      - mw-db-network
+      - mw-redis-network
+      - dokploy-network
     healthcheck:
       test: supercronic -test /var/www/docker/php/schedule/schedule | grep -q 'is valid'
       interval: 30s
@@ -91,12 +122,27 @@ services:
   websockets:
     <<: *app
     environment:
-      COMMAND:
-        php artisan reverb:start --host="0.0.0.0" --port=8080
-        --hostname="localhost" --debug
       PROCESS: reverb
+      XDEBUG_MODE: 'off'
+      COMMAND: >
+        php artisan reverb:start
+        --host=0.0.0.0
+        --port=8080
+        --debug
+    # Перевизначаємо ports — прибираємо 80/443, залишаємо тільки 8080
     ports:
-      - '8080:8080'
+      - '8080'
+    # Прибираємо Caddy volumes — вони не потрібні для Reverb
+    volumes:
+      - ../files/vendor:/var/www/vendor
+      - ../files/storage/logs:/var/www/storage/logs
+      - mw_app_composer_data:/.composer
+    expose:
+      - '8080'
+    networks:
+      - mw-db-network
+      - mw-redis-network
+      - dokploy-network
 
   mailpit:
     image: axllent/mailpit:latest
