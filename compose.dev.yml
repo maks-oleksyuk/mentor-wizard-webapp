@@ -8,7 +8,11 @@ services:
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - 5432
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 5432
+        published: '33371'
+        protocol: tcp
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
@@ -77,7 +81,7 @@ services:
       # Кеші composer/npm
       - mw_app_composer_data:/.composer
       - mw_app_npm_data:/.npm
-    ports:
+    expose:
       - '80'
       - '443'
       - '5173'
@@ -129,27 +133,23 @@ services:
         --host=0.0.0.0
         --port=8080
         --debug
-    # Перевизначаємо ports — прибираємо 80/443, залишаємо тільки 8080
-    ports:
-      - '8080'
-    # Прибираємо Caddy volumes — вони не потрібні для Reverb
-    volumes:
-      - ../files/vendor:/var/www/vendor
-      - ../files/storage/logs:/var/www/storage/logs
-      - mw_app_composer_data:/.composer
     expose:
-      - '8080'
+      - 8080
     networks:
       - mw-db-network
       - mw-redis-network
       - dokploy-network
+    healthcheck:
+      disable: true
 
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
-    ports:
-      - '${FORWARD_MAILPIT_PORT:-1025}:1025'
-      - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
+    environment:
+      MP_UI_AUTH: ${MP_UI_AUTH}
+    expose:
+      - '1025'
+      - '8025'
     networks:
       - mw-db-network
       - dokploy-network
